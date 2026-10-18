@@ -1,0 +1,36 @@
+# UI framework for the research assistant app
+streamlit
+
+# LangChain core, LCEL, Runnables, prompts, parsers, and tool interfaces
+langchain
+langchain-core
+
+# OpenAI API integration
+langchain-openai
+
+# Multi-agent orchestration / graph workflows
+langgraph
+
+# Tavily web search tool
+langchain-tavily
+tavily-python
+
+# HTML parsing with BeautifulSoup
+beautifulsoup4
+lxml
+
+# HTTP requests for fetching webpages
+requests
+httpx
+
+# Environment variables from .env
+python-dotenv
+
+# Data validation and structured agent outputs
+pydantic
+
+# Optional: useful for async scraping / HTML extraction
+aiohttp
+
+# Optional: progress display and readable terminal logs
+rich
