@@ -7,7 +7,6 @@ langchain-core
 
 # OpenAI API integration
 langchain-openai
-
 openai
 
 # Multi-agent orchestration / graph workflows
