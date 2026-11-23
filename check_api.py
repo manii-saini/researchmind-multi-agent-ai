@@ -1,29 +1,16 @@
-from pathlib import Path
+from llm import backend_info, build_report, build_feedback, local_model
 
-from dotenv import dotenv_values
-from langchain_openai import ChatOpenAI
+print("Checking local research backend (no API key required)...")
+print("Backend:", backend_info())
 
+if local_model():
+    print("A local Ollama model is available for generated reports.")
+else:
+    print("No local model found; the built-in offline generator will be used.")
 
-env_file = Path(__file__).resolve().parent / ".env"
-config = dotenv_values(env_file, encoding="utf-8-sig")
-api_key = config.get("OPENAI_API_KEY")
-
-if not api_key or not api_key.strip():
-    print("ENV ERROR: OPENAI_API_KEY is missing.")
-    raise SystemExit(1)
-
-print("API key loaded. Testing OpenAI authentication...")
-
-try:
-    llm = ChatOpenAI(
-        model="gpt-4o-mini",
-        api_key=api_key.strip(),
-        temperature=0,
-    )
-    result = llm.invoke("Reply only with: WORKING")
-    print("SUCCESS:", result.content)
-except Exception as exc:
-    print("API REQUEST FAILED:", type(exc).__name__)
-    print("HTTP status:", getattr(exc, "status_code", None))
-    print("API error code:", getattr(exc, "code", None))
-    raise SystemExit(1) from None
+sample = build_report(
+    "Keyless research pipeline",
+    "Title: Local backend\nURL: https://example.com/local\nSnippet: The pipeline runs without an API key.",
+)
+print("Report generation:", "OK" if "Key Findings" in sample else "FAILED")
+print("Critic generation:", "OK" if "Score:" in build_feedback(sample) else "FAILED")

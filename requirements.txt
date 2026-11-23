@@ -5,15 +5,10 @@ streamlit
 langchain
 langchain-core
 
-# OpenAI API integration
-langchain-openai
-openai
+# Keyless local LLM: Ollama is called directly over HTTP (no SDK/key needed)
+requests
 
-# Multi-agent orchestration / graph workflows
-langgraph
-
-# Tavily web search tool
-langchain-tavily
+# Optional richer web search; the app falls back to DuckDuckGo, Wikipedia and offline notes
 tavily-python
 
 # HTML parsing with BeautifulSoup

@@ -1,8 +1,14 @@
-import streamlit as st
+import re
 import time
-import os
-from openai import APIError
-from agents import build_reader_agent, build_search_agent, build_writer_chain, build_critic_chain
+
+import streamlit as st
+from agents import (
+    backend_info,
+    build_reader_agent,
+    build_search_agent,
+    build_writer_chain,
+    build_critic_chain,
+)
 
 # ── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -345,6 +351,7 @@ with col_input:
         label_visibility="visible",
     )
     run_btn = st.button("⚡  Run Research Pipeline", use_container_width=True)
+    st.caption(backend_info())
     st.markdown('</div>', unsafe_allow_html=True)
 
     # Example chips
@@ -378,30 +385,45 @@ with col_pipeline:
         if not r:
             return "waiting"
         steps = ["search", "reader", "writer", "critic"]
-        idx = steps.index(step)
-        completed = list(r.keys())
-        # figure out which steps are done
         if step in r:
             return "done"
-        # which step is running now (first not in r)
         if st.session_state.running:
-            for i, k in enumerate(steps):
-                if k not in r:
-                    return "running" if k == step else "waiting"
+            for item in steps:
+                if item not in r:
+                    return "running" if item == step else "waiting"
         return "waiting"
 
-    step_card("01", "Search Agent",  s("search"), "Gathers recent web information")
-    step_card("02", "Reader Agent",  s("reader"), "Scrapes & extracts deep content")
-    step_card("03", "Writer Chain",  s("writer"), "Drafts the full research report")
-    step_card("04", "Critic Chain",  s("critic"), "Reviews & scores the report")
+    def detail(step):
+        text = r.get(step, "")
+        fallback = {
+            "search": "Gathers recent web information",
+            "reader": "Scrapes & extracts deep content",
+            "writer": "Drafts the full research report",
+            "critic": "Reviews & scores the report",
+        }[step]
+        if not text:
+            return fallback
+        if step == "search":
+            count = len({url.lower() for url in re.findall(r"URL:\s*(https?://[^\s]+)", text)})
+            return f"{count} unique source(s) found"
+        if step == "reader":
+            count = len(re.findall(r"Source:\s*https?://", text, re.IGNORECASE))
+            return f"{count} page(s) read in full"
+        if step == "writer":
+            return f"{len(text.split())} words drafted"
+        match = re.search(r"Score:\s*(\d+)/10", text)
+        return f"Score {match.group(1)}/10" if match else "Report reviewed"
+
+    step_card("01", "Search Agent",  s("search"), detail("search"))
+    step_card("02", "Reader Agent",  s("reader"), detail("reader"))
+    step_card("03", "Writer Agent",  s("writer"), detail("writer"))
+    step_card("04", "Critic Agent",  s("critic"), detail("critic"))
 
 
 # ── Run pipeline ──────────────────────────────────────────────────────────────
 if run_btn:
     if not topic.strip():
         st.warning("Please enter a research topic first.")
-    elif not os.getenv("OPENAI_API_KEY"):
-        st.error("Add OPENAI_API_KEY to the project .env file to use OpenAI.")
     else:
         st.session_state.results = {}
         st.session_state.running = True
@@ -409,63 +431,57 @@ if run_btn:
         st.rerun()
 
 if st.session_state.running and not st.session_state.done:
-    results = {}
+    results = dict(st.session_state.results)
     topic_val = st.session_state.topic_input
 
     try:
-        # ── Step 1: Search ──
-        with st.spinner("🔍  Search Agent is working…"):
-            search_agent = build_search_agent()
-            sr = search_agent.invoke({
-                "messages": [("user", f"Find recent, reliable and detailed information about: {topic_val}")]
-            })
-            results["search"] = sr["messages"][-1].content
-            st.session_state.results = dict(results)
+        if "search" not in results:
+            with st.spinner("🔍  Search Agent is working…"):
+                search_agent = build_search_agent()
+                sr = search_agent.invoke({
+                    "messages": [("user", f"Find recent, reliable and detailed information about: {topic_val}")]
+                })
+                results["search"] = sr["messages"][-1].content
+                st.session_state.results = dict(results)
+                st.rerun()
 
-        # ── Step 2: Reader ──
-        with st.spinner("📄  Reader Agent is scraping top resources…"):
-            reader_agent = build_reader_agent()
-            rr = reader_agent.invoke({
-                "messages": [("user",
-                    f"Based on the following search results about '{topic_val}', "
-                    f"pick the most relevant URL and scrape it for deeper content.\n\n"
-                    f"Search Results:\n{results['search'][:800]}"
-                )]
-            })
-            results["reader"] = rr["messages"][-1].content
-            st.session_state.results = dict(results)
+        if "reader" not in results:
+            with st.spinner("📄  Reader Agent is scraping top resources…"):
+                reader_agent = build_reader_agent()
+                rr = reader_agent.invoke({
+                    "messages": [("user",
+                        f"Based on the following search results about '{topic_val}', "
+                        f"pick the most relevant URL and scrape it for deeper content.\n\n"
+                        f"Search Results:\n{results['search'][:1000]}"
+                    )]
+                })
+                results["reader"] = rr["messages"][-1].content
+                st.session_state.results = dict(results)
+                st.rerun()
 
-        # ── Step 3: Writer ──
-        with st.spinner("✍️  Writer is drafting the report…"):
-            research_combined = (
-                f"SEARCH RESULTS:\n{results['search']}\n\n"
-                f"DETAILED SCRAPED CONTENT:\n{results['reader']}"
-            )
-            results["writer"] = build_writer_chain().invoke({
-                "topic": topic_val,
-                "research": research_combined
-            })
-            st.session_state.results = dict(results)
+        if "writer" not in results:
+            with st.spinner("✍️  Writer Agent is drafting the report…"):
+                research_combined = (
+                    f"SEARCH RESULTS:\n{results['search']}\n\n"
+                    f"DETAILED SCRAPED CONTENT:\n{results['reader']}"
+                )
+                results["writer"] = build_writer_chain().invoke({
+                    "topic": topic_val,
+                    "research": research_combined
+                })
+                st.session_state.results = dict(results)
+                st.rerun()
 
-        # ── Step 4: Critic ──
-        with st.spinner("🧐  Critic is reviewing the report…"):
-            results["critic"] = build_critic_chain().invoke({
-                "report": results["writer"]
-            })
-            st.session_state.results = dict(results)
-    except APIError as exc:
+        if "critic" not in results:
+            with st.spinner("🧐  Critic Agent is reviewing the report…"):
+                results["critic"] = build_critic_chain().invoke({
+                    "report": results["writer"]
+                })
+                st.session_state.results = dict(results)
+    except Exception as exc:
         st.session_state.running = False
         st.session_state.done = False
-        if getattr(exc, "code", None) == "credit_balance_exhausted":
-            st.error(
-                "Your OpenAI API account has no available credits. Add API billing/credits "
-                "or configure a key from an account with available credit."
-            )
-        else:
-            st.error(
-                "OpenAI rejected the request. Check OPENAI_API_KEY and confirm it is active "
-                "and has access to gpt-4o-mini."
-            )
+        st.error(f"Pipeline error: {type(exc).__name__}: {exc}")
     else:
         st.session_state.running = False
         st.session_state.done = True
@@ -520,6 +536,6 @@ if r:
 # ── Footer ────────────────────────────────────────────────────────────────────
 st.markdown("""
 <div class="notice">
-    ResearchMind · Powered by LangChain multi-agent pipeline · Built with Streamlit
+    ResearchMind · Keyless multi-agent pipeline · Local Ollama or offline mode · Built with Streamlit
 </div>
 """, unsafe_allow_html=True)

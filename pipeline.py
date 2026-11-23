@@ -1,8 +1,21 @@
-from agents import build_reader_agent, build_search_agent, build_writer_chain, build_critic_chain
+import re
+import sys
+
+from agents import (
+    backend_info,
+    build_critic_chain,
+    build_reader_agent,
+    build_search_agent,
+    build_writer_chain,
+)
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(errors="replace")
 
 def run_research_pipeline(topic : str) -> dict:
 
     state = {}
+    print(f"\nBackend: {backend_info()}")
 
     #search agent working 
     print("\n"+" ="*50)
@@ -51,6 +64,7 @@ def run_research_pipeline(topic : str) -> dict:
         "research" : research_combined
     })
 
+    print(f"\n Report length: {len(state['report'].split())} words")
     print("\n Final Report\n",state['report'])
 
     #critic report 
@@ -63,6 +77,8 @@ def run_research_pipeline(topic : str) -> dict:
         "report":state['report']
     })
 
+    score = re.search(r"Score:\s*(\d+)/10", state['feedback'])
+    print(f"\n Critic score: {score.group(1) + '/10' if score else 'not parsed'}")
     print("\n critic report \n", state['feedback'])
 
     return state

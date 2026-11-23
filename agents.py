@@ -1,89 +1,122 @@
-from langgraph.prebuilt import create_react_agent
-from langchain_openai import ChatOpenAI
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
-from tools import web_search, scrape_url
-from dotenv import load_dotenv
-import os
+import re
 
-load_dotenv()
+from llm import FEEDBACK_PROMPT, REPORT_PROMPT, generate
+from tools import scrape_url, web_search
+
+
+class _Message:
+    def __init__(self, content):
+        self.content = content
+        self.type = "ai"
+
+
+class _Chain:
+    def __init__(self, runner):
+        self._runner = runner
+
+    def invoke(self, payload):
+        return self._runner(payload)
+
 
 def build_llm():
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise ValueError("OPENAI_API_KEY is missing. Add an OpenAI API key to the project .env file.")
-    return ChatOpenAI(
-        model="gpt-4o-mini",
-        temperature=0,
-        api_key=api_key,
-    )
+    return generate
 
 
-# 1st agent
+def backend_info():
+    from llm import backend_info as _backend_info
+
+    return _backend_info()
+
+
+def _last_user_text(payload):
+    messages = payload.get("messages", []) if isinstance(payload, dict) else []
+    if not messages:
+        return ""
+    last = messages[-1]
+    if isinstance(last, tuple):
+        return str(last[-1])
+    if isinstance(last, dict):
+        return str(last.get("content", ""))
+    return str(getattr(last, "content", ""))
+
+
+def _extract_query(text):
+    match = re.search(r"about:\s*(.+)$", text, re.IGNORECASE | re.DOTALL)
+    if match:
+        return match.group(1).strip()
+    return text.strip()
+
+
+def _extract_urls(text):
+    urls = re.findall(r"URL:\s*(https?://[^\s]+)", text, re.IGNORECASE)
+    if not urls:
+        urls = re.findall(r"https?://[^\s)]+", text)
+    return [url.rstrip("),.;'\"") for url in urls[:5]]
+
+
+class _ToolAgent:
+    def __init__(self, tool_fn, kind):
+        self._tool_fn = tool_fn
+        self._kind = kind
+
+    def invoke(self, payload):
+        text = _last_user_text(payload)
+        if self._kind == "search":
+            query = _extract_query(text)
+            content = self._tool_fn.invoke({"query": query})
+        else:
+            urls = _extract_urls(text)
+            if not urls:
+                content = (
+                    "No URL was found in the search results. "
+                    "Run the search step again with a more specific topic."
+                )
+            else:
+                blocks = []
+                for url in urls:
+                    scraped = self._tool_fn.invoke({"url": url})
+                    lowered = scraped.lower()
+                    if scraped.startswith("Could not scrape") or any(
+                        marker in lowered
+                        for marker in (
+                            "checking your browser",
+                            "recaptcha",
+                            "enable javascript",
+                            "access denied",
+                            "just a moment",
+                        )
+                    ):
+                        continue
+                    blocks.append(f"Source: {url}\n\n{scraped}")
+                content = "\n\n----\n\n".join(blocks) or (
+                    "The top sources blocked automated reading, but their search "
+                    "snippets are still available for the report."
+                )
+        return {"messages": [_Message(content)]}
+
 
 def build_search_agent():
-    return create_react_agent(
-        model=build_llm(),
-        tools=[web_search],
-    )
+    return _ToolAgent(web_search, "search")
 
-
-# 2nd agent
 
 def build_reader_agent():
-    return create_react_agent(
-        model=build_llm(),
-        tools=[scrape_url],
-    )
+    return _ToolAgent(scrape_url, "reader")
 
-
-#writer chain 
-
-writer_prompt = ChatPromptTemplate.from_messages([
-    ("system", "You are an expert research writer. Write clear, structured and insightful reports."),
-    ("human", """Write a detailed research report on the topic below.
-
-Topic: {topic}
-
-Research Gathered:
-{research}
-
-Structure the report as:
-- Introduction
-- Key Findings (minimum 3 well-explained points)
-- Conclusion
-- Sources (list all URLs found in the research)
-
-Be detailed, factual and professional."""),
-])
 
 def build_writer_chain():
-    return writer_prompt | build_llm() | StrOutputParser()
+    def run(payload):
+        topic = payload.get("topic", "")
+        research = payload.get("research", "")
+        prompt = REPORT_PROMPT.format(topic=topic, research=research)
+        return generate(prompt, task="report", topic=topic, research=research)
 
-#critic_chain 
+    return _Chain(run)
 
-critic_prompt = ChatPromptTemplate.from_messages([
-     ("system", "You are a sharp and constructive research critic. Be honest and specific."),
-    ("human", """Review the research report below and evaluate it strictly.
-
-Report:
-{report}
-
-Respond in this exact format:
-
-Score: X/10
-
-Strengths:
-- ...
-- ...
-
-Areas to Improve:
-- ...
-- ...
-
-One line verdict:
-..."""),
-])
 
 def build_critic_chain():
-    return critic_prompt | build_llm() | StrOutputParser()
+    def run(payload):
+        report = payload.get("report", "")
+        prompt = FEEDBACK_PROMPT.format(report=report)
+        return generate(prompt, task="feedback", report=report)
+
+    return _Chain(run)
